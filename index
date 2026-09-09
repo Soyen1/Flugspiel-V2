@@ -46,9 +46,9 @@
         .hidden { display: none; }
         #flightRouteList { margin-top: 10px; }
         .reserve-controls { display: flex; flex-direction: column; gap: 5px; margin: 10px 0; }
-        .reserve-item { display: flex; justify-content: space-between; align-items: center; background: #fff; border: 1px solid #ccc; border-radius: 8px; padding: 8px 10px; }
-        .available-item { display: flex; justify-content: space-between; align-items: center; background: #e9ecef; border: 1px solid #ccc; border-radius: 8px; padding: 8px 10px; margin-bottom: 5px; }
-        .available-item button { background: #28a745; color: white; border: none; border-radius: 15px; padding: 5px 10px; cursor: pointer; }
+        .reserve-item, .available-item { display: flex; justify-content: space-between; align-items: center; background: #fff; border: 1px solid #ccc; border-radius: 8px; padding: 8px 10px; margin-bottom: 5px; }
+        .available-item button, .reserve-item button { background: #28a745; color: white; border: none; border-radius: 15px; padding: 5px 10px; cursor: pointer; }
+        .available-item button.remove { background: #dc3545; }
     </style>
 </head>
 <body>
@@ -84,13 +84,22 @@
                 <h3>Reserve ablegen (je +1000 km)</h3>
                 <div id="reserveDiscardList" class="reserve-controls"></div>
                 <p style="font-size:0.85rem;">Markierte Karten werden abgeworfen.</p>
-                <button class="btn" id="btnContinue" onclick="finishTankPhase()">Weiter zur Flugauswahl</button>
+                <button class="btn" id="btnContinue" onclick="finishTankPhase()">Weiter zur Auslage</button>
+            </div>
+
+            <!-- Auslage scannen -->
+            <div id="auslageSection" class="section hidden">
+                <h2>Auslage scannen (4 Karten)</h2>
+                <p>Scanne jetzt die 4 Flughafen-Karten der Auslage. Du kannst sie gleichzeitig vor die Kamera halten.</p>
+                <button class="btn" onclick="startScan('auslage')">QR-Scanner öffnen</button>
+                <div id="auslageList" class="available-list"></div>
+                <button class="btn success" onclick="finishAuslage()">Weiter zur Flugauswahl</button>
             </div>
 
             <!-- Flugauswahl -->
             <div id="flightSection" class="section hidden">
                 <h2>Flugroute wählen</h2>
-                <p>Scanne die Flughäfen oder tippe sie in der Liste an.</p>
+                <p>Tippe auf Flughäfen, um sie zur Route hinzuzufügen, oder scanne weitere Codes.</p>
                 <button class="btn" onclick="startScan('flight')">QR-Scanner öffnen</button>
                 <div style="margin-top:10px;">
                     <h4>Verfügbare Flughäfen</h4>
@@ -110,7 +119,7 @@
     <!-- Scanner Overlay -->
     <div id="scannerOverlay">
         <video id="video" autoplay playsinline></video>
-        <p id="scanHint">Richte die Kamera auf den QR-Code.</p>
+        <p id="scanHint">Richte die Kamera auf die QR-Codes.</p>
         <button class="btn danger" onclick="stopScan()">Scanner beenden</button>
     </div>
 
@@ -159,14 +168,15 @@
         let reserve = [];           // bis zu 4 Flughäfen
         let discardList = [];       // markierte Reservekarten zum Ablegen
         let flightRoute = [];       // ausgewählte Flüge
-        let scanTarget = null;
+        let scanTarget = null;      // 'start', 'auslage', 'flight'
         let historyStack = [];
         let logEntries = [];
-        let overflowCandidates = []; // für Reserve-Überlauf
+        let overflowCandidates = [];
         let overflowSelected = new Set();
 
         let videoStream = null;
         let scannerActive = false;
+        let usingBarcodeDetector = false;
 
         // Umlaut-Rückersetzung
         function restoreUmlauts(str) {
@@ -273,12 +283,14 @@
         function showStartSection() {
             document.getElementById('startSection').classList.remove('hidden');
             document.getElementById('tankSection').classList.add('hidden');
+            document.getElementById('auslageSection').classList.add('hidden');
             document.getElementById('flightSection').classList.add('hidden');
         }
 
         function showTankPhase() {
             document.getElementById('startSection').classList.add('hidden');
             document.getElementById('tankSection').classList.remove('hidden');
+            document.getElementById('auslageSection').classList.add('hidden');
             document.getElementById('flightSection').classList.add('hidden');
             currentTankAction = null;
             discardList = [];
@@ -287,9 +299,18 @@
             updateStatus();
         }
 
+        function showAuslageSection() {
+            document.getElementById('startSection').classList.add('hidden');
+            document.getElementById('tankSection').classList.add('hidden');
+            document.getElementById('auslageSection').classList.remove('hidden');
+            document.getElementById('flightSection').classList.add('hidden');
+            renderAuslageList();
+        }
+
         function showFlightSelection() {
             document.getElementById('startSection').classList.add('hidden');
             document.getElementById('tankSection').classList.add('hidden');
+            document.getElementById('auslageSection').classList.add('hidden');
             document.getElementById('flightSection').classList.remove('hidden');
             flightRoute = [];
             renderAvailableFlights();
@@ -320,11 +341,8 @@
 
         function toggleDiscard(index) {
             const pos = discardList.indexOf(index);
-            if (pos === -1) {
-                discardList.push(index);
-            } else {
-                discardList.splice(pos, 1);
-            }
+            if (pos === -1) discardList.push(index);
+            else discardList.splice(pos, 1);
             renderReserveDiscardList();
         }
 
@@ -345,7 +363,6 @@
                 alert('Bitte wähle zuerst Tanken oder Bonuskarte.');
                 return;
             }
-            // Tankaktion ausführen
             if (currentTankAction === 'tank') {
                 const maxTank = 4000 + (bonusCards + tempBonusIncrease) * 250;
                 tank = Math.min(maxTank, tank + 1000);
@@ -365,10 +382,38 @@
             }
             discardList = [];
             pushHistory();
+            showAuslageSection();
+        }
+
+        function renderAuslageList() {
+            const container = document.getElementById('auslageList');
+            container.innerHTML = '';
+            auslage.forEach((airport, index) => {
+                const div = document.createElement('div');
+                div.className = 'available-item';
+                const info = document.createElement('span');
+                info.textContent = `${airport.name} (${airport.country})`;
+                const btn = document.createElement('button');
+                btn.textContent = 'Entfernen';
+                btn.onclick = () => {
+                    auslage.splice(index, 1);
+                    renderAuslageList();
+                };
+                div.appendChild(info);
+                div.appendChild(btn);
+                container.appendChild(div);
+            });
+        }
+
+        function finishAuslage() {
+            if (auslage.length === 0) {
+                alert('Bitte mindestens einen Flughafen scannen.');
+                return;
+            }
+            // Prüfen, ob genau 4? Nicht zwingend, aber wir gehen davon aus.
             showFlightSelection();
         }
 
-        // ==================== FLUGROUTEN-VERWALTUNG ====================
         function getAvailableFlights() {
             return [...auslage, ...reserve];
         }
@@ -401,7 +446,6 @@
                 infoDiv.className = 'airport-info';
                 infoDiv.innerHTML = `<strong>${airport.name}</strong> (${airport.country})`;
                 li.appendChild(infoDiv);
-
                 const moveBtns = document.createElement('div');
                 moveBtns.className = 'move-btns';
                 const upBtn = document.createElement('button');
@@ -415,13 +459,11 @@
                 moveBtns.appendChild(upBtn);
                 moveBtns.appendChild(downBtn);
                 li.appendChild(moveBtns);
-
                 const removeBtn = document.createElement('button');
                 removeBtn.className = 'remove-btn';
                 removeBtn.innerHTML = '×';
                 removeBtn.onclick = () => removeFlight(index);
                 li.appendChild(removeBtn);
-
                 container.appendChild(li);
             });
         }
@@ -460,7 +502,14 @@
                     await video.play();
                 }
                 scannerActive = true;
-                requestAnimationFrame(scanLoop);
+                // Prüfen, ob BarcodeDetector verfügbar ist (für Multiscan)
+                if ('BarcodeDetector' in window) {
+                    usingBarcodeDetector = true;
+                    requestAnimationFrame(scanLoopWithBarcodeDetector);
+                } else {
+                    usingBarcodeDetector = false;
+                    requestAnimationFrame(scanLoopWithJsQR);
+                }
             } catch (err) {
                 alert('Kamera-Zugriff verweigert oder nicht verfügbar.');
                 stopScan();
@@ -474,14 +523,44 @@
                 videoStream.getTracks().forEach(track => track.stop());
                 videoStream = null;
             }
-            if (scanTarget === 'flight') {
-                // Scanner geschlossen, aber Flugauswahl bleibt offen
+            // Nach dem Scannen ggf. Anzeigen aktualisieren
+            if (scanTarget === 'auslage') {
+                renderAuslageList();
+            } else if (scanTarget === 'flight') {
                 renderAvailableFlights();
                 renderFlightRoute();
             }
+            scanTarget = null;
         }
 
-        function scanLoop() {
+        async function scanLoopWithBarcodeDetector() {
+            if (!scannerActive) return;
+            const video = document.getElementById('video');
+            if (video.readyState === video.HAVE_ENOUGH_DATA) {
+                try {
+                    const detector = new BarcodeDetector({ formats: ['qr_code'] });
+                    const codes = await detector.detect(video);
+                    if (codes.length > 0) {
+                        for (const code of codes) {
+                            handleQRCode(code.rawValue);
+                            // Bei 'start' sofort stoppen
+                            if (scanTarget === 'start') {
+                                stopScan();
+                                return;
+                            }
+                        }
+                    }
+                } catch (e) {
+                    console.warn('BarcodeDetector nicht nutzbar, fallback auf jsQR', e);
+                    usingBarcodeDetector = false;
+                    requestAnimationFrame(scanLoopWithJsQR);
+                    return;
+                }
+            }
+            requestAnimationFrame(scanLoopWithBarcodeDetector);
+        }
+
+        function scanLoopWithJsQR() {
             if (!scannerActive) return;
             const video = document.getElementById('video');
             if (video.readyState === video.HAVE_ENOUGH_DATA) {
@@ -494,14 +573,13 @@
                 const code = jsQR(imageData.data, imageData.width, imageData.height);
                 if (code && code.data) {
                     handleQRCode(code.data);
-                    // Bei Start sofort stoppen, bei Flight weiterlaufen lassen
                     if (scanTarget === 'start') {
                         stopScan();
                         return;
                     }
                 }
             }
-            requestAnimationFrame(scanLoop);
+            requestAnimationFrame(scanLoopWithJsQR);
         }
 
         function handleQRCode(data) {
@@ -513,7 +591,6 @@
                 }
             } catch (e) {
                 alert('QR-Code konnte nicht gelesen werden.');
-                stopScan();
                 return;
             }
             // Umlaute wiederherstellen
@@ -538,15 +615,38 @@
                 addLog(`Spiel gestartet mit Startflughafen ${airport.name}.`);
                 pushHistory();
                 showTankPhase();
+                stopScan();
+            } else if (scanTarget === 'auslage') {
+                // Prüfen, ob schon vorhanden
+                const exists = auslage.some(a => a.name === airport.name && a.lat === airport.lat && a.lon === airport.lon);
+                if (!exists && auslage.length < 4) {
+                    auslage.push(airport);
+                    renderAuslageList();
+                    addLog(`Auslage-Karte hinzugefügt: ${airport.name}.`);
+                } else if (auslage.length >= 4) {
+                    // Optional: Wenn 4 erreicht, Scanner automatisch stoppen
+                    alert('Bereits 4 Karten in der Auslage.');
+                    stopScan();
+                }
             } else if (scanTarget === 'flight') {
-                // Prüfen, ob der gescannte Flughafen in der Auslage oder Reserve ist
+                // Wenn der gescannte Flughafen bereits in Auslage/Reserve ist, zur Route hinzufügen, sonst als neue Karte in Auslage?
                 const available = getAvailableFlights();
                 const found = available.find(a => a.name === airport.name && a.lat === airport.lat && a.lon === airport.lon);
                 if (found) {
                     addToRoute(found);
-                    // Scanner bleibt offen für weitere Codes
                 } else {
-                    alert('Dieser Flughafen ist nicht in der aktuellen Auslage/Reserve.');
+                    // Unbekannte Karte: der Auslage hinzufügen, damit sie verfügbar wird
+                    if (auslage.length < 4) {
+                        auslage.push(airport);
+                        renderAuslageList();
+                    } else if (reserve.length < 4) {
+                        reserve.push(airport);
+                    } else {
+                        alert('Keine freie Kapazität in Auslage oder Reserve.');
+                        return;
+                    }
+                    addToRoute(airport);
+                    renderAvailableFlights();
                 }
             }
         }
@@ -629,7 +729,6 @@
                 auslage = [];
                 finishRound();
             } else {
-                // Überlauf-Auswahl nötig
                 overflowCandidates = [...reserve, ...restAuslage];
                 overflowSelected = new Set();
                 showOverflowSelection();
@@ -644,7 +743,7 @@
             } else {
                 pushHistory();
                 auslage = [];
-                reserve = [...reserve, ...auslage]; // Nicht geflogene Auslage in Reserve
+                reserve = [...reserve, ...auslage];
                 if (reserve.length > 4) {
                     overflowCandidates = [...reserve];
                     overflowSelected = new Set();
@@ -702,7 +801,6 @@
             if (currentRound > 12) {
                 endGame();
             } else {
-                generateNewAuslage();
                 pushHistory();
                 showTankPhase();
             }
@@ -767,9 +865,6 @@
                 window._summaryResolve = null;
             }
         }
-
-        // ==================== UNDO (optional) ====================
-        // Button kann ergänzt werden, im Code vorhanden
 
         // ==================== INIT ====================
         window.onload = function() {

@@ -47,9 +47,11 @@
         .hidden { display: none; }
         #flightRouteList { margin-top: 10px; }
         .reserve-controls { display: flex; flex-direction: column; gap: 5px; margin: 10px 0; }
-        .reserve-item, .available-item { display: flex; justify-content: space-between; align-items: center; background: #fff; border: 1px solid #ccc; border-radius: 8px; padding: 8px 10px; margin-bottom: 5px; }
+        .reserve-item, .available-item { display: flex; justify-content: space-between; align-items: center; background: #fff; border: 1px solid #ccc; border-radius: 8px; padding: 8px 10px; margin-bottom: 5px; cursor: pointer; }
         .available-item button, .reserve-item button { background: #28a745; color: white; border: none; border-radius: 15px; padding: 5px 10px; cursor: pointer; }
         .available-item button.remove { background: #dc3545; }
+        .overflow-marked { background: #f8d7da !important; text-decoration: line-through; color: #721c24; }
+        #overflowHint { margin-bottom: 10px; font-weight: bold; color: #1a3e6e; }
     </style>
 </head>
 <body>
@@ -143,7 +145,7 @@
     <div id="overflowOverlay">
         <div class="summary-box">
             <h2>Reserve ist voll</h2>
-            <p>Wähle genau 4 Karten, die du behalten möchtest.</p>
+            <p id="overflowHint"></p>
             <div id="overflowList"></div>
             <button class="btn primary" onclick="confirmOverflow()">Bestätigen</button>
         </div>
@@ -157,7 +159,7 @@
         let bonusCards = 0;
         let tempBonusIncrease = 0;
         let currentAirport = null;
-        let currentTankAction = 'tank'; // Tanken ist Standard
+        let currentTankAction = 'tank';
         let auslage = [];
         let reserve = [];
         let discardList = [];
@@ -172,7 +174,6 @@
         let scannerActive = false;
         let usingBarcodeDetector = false;
 
-        // Umlaut-Rückersetzung
         function restoreUmlauts(str) {
             if (typeof str !== 'string') return str;
             return str
@@ -258,7 +259,6 @@
             document.getElementById('auslageSection').classList.add('hidden');
             document.getElementById('flightSection').classList.add('hidden');
 
-            // Tanken vorauswählen
             currentTankAction = 'tank';
             tempBonusIncrease = 0;
             discardList = [];
@@ -275,6 +275,7 @@
             document.getElementById('tankSection').classList.add('hidden');
             document.getElementById('auslageSection').classList.remove('hidden');
             document.getElementById('flightSection').classList.add('hidden');
+            updateStatus();   // <-- Tank wird jetzt sofort aktualisiert
             renderAuslageList();
         }
 
@@ -306,7 +307,7 @@
                 const btn = document.createElement('button');
                 btn.className = `discard-btn ${discardList.includes(index) ? 'marked' : ''}`;
                 btn.textContent = discardList.includes(index) ? 'Ablegen ✓' : 'Ablegen';
-                btn.onclick = () => toggleDiscard(index);
+                btn.onclick = (e) => { e.stopPropagation(); toggleDiscard(index); };
                 div.appendChild(info);
                 div.appendChild(btn);
                 container.appendChild(div);
@@ -374,7 +375,8 @@
                 const btn = document.createElement('button');
                 btn.className = 'remove';
                 btn.textContent = 'Entfernen';
-                btn.onclick = () => {
+                btn.onclick = (e) => {
+                    e.stopPropagation();
                     auslage.splice(index, 1);
                     renderAuslageList();
                 };
@@ -407,7 +409,7 @@
                 info.textContent = `${airport.name} (${airport.country})`;
                 const btn = document.createElement('button');
                 btn.textContent = '+ Route';
-                btn.onclick = () => addToRoute(airport);
+                btn.onclick = (e) => { e.stopPropagation(); addToRoute(airport); };
                 div.appendChild(info);
                 div.appendChild(btn);
                 container.appendChild(div);
@@ -555,7 +557,6 @@
                     throw new Error('Ungültiger QR-Code');
                 }
             } catch (e) {
-                // Ungültiger Code wird ignoriert, um Multiscan nicht zu unterbrechen
                 return;
             }
             airport.name = restoreUmlauts(airport.name);
@@ -705,7 +706,6 @@
 
         function skipFlight() {
             addLog(`Runde ${currentRound}: Kein Flug durchgeführt.`);
-            // Auslage komplett in Reserve verschieben
             reserve = [...reserve, ...auslage];
             auslage = [];
             if (reserve.length > 4) {
@@ -718,26 +718,30 @@
             }
         }
 
+        // ==================== ÜBERLAUF-AUSWAHL ====================
         function showOverflowSelection() {
+            const excess = overflowCandidates.length - 4;
+            document.getElementById('overflowHint').textContent =
+                `Wähle ${excess} Karte${excess === 1 ? '' : 'n'} zum Ablegen aus (bis 4 übrig bleiben).`;
             document.getElementById('overflowOverlay').classList.add('active');
             const container = document.getElementById('overflowList');
             container.innerHTML = '';
             overflowCandidates.forEach((airport, index) => {
                 const div = document.createElement('div');
-                div.className = 'available-item';
+                div.className = 'available-item' + (overflowSelected.has(index) ? ' overflow-marked' : '');
                 div.textContent = `${airport.name} (${airport.country})`;
                 div.onclick = () => toggleOverflow(index);
-                div.style.background = overflowSelected.has(index) ? '#cce5ff' : '';
                 container.appendChild(div);
             });
         }
 
         function toggleOverflow(index) {
+            const maxDiscard = overflowCandidates.length - 4;
             if (overflowSelected.has(index)) {
                 overflowSelected.delete(index);
             } else {
-                if (overflowSelected.size >= 4) {
-                    alert('Bitte genau 4 Karten auswählen.');
+                if (overflowSelected.size >= maxDiscard) {
+                    alert(`Bitte genau ${maxDiscard} Karte${maxDiscard === 1 ? '' : 'n'} zum Ablegen auswählen.`);
                     return;
                 }
                 overflowSelected.add(index);
@@ -746,12 +750,15 @@
         }
 
         function confirmOverflow() {
-            if (overflowSelected.size !== 4) {
-                alert('Bitte genau 4 Karten auswählen.');
+            const maxDiscard = overflowCandidates.length - 4;
+            if (overflowSelected.size !== maxDiscard) {
+                alert(`Bitte genau ${maxDiscard} Karte${maxDiscard === 1 ? '' : 'n'} zum Ablegen auswählen.`);
                 return;
             }
             reserve = [];
-            overflowSelected.forEach(idx => reserve.push(overflowCandidates[idx]));
+            overflowCandidates.forEach((airport, idx) => {
+                if (!overflowSelected.has(idx)) reserve.push(airport);
+            });
             auslage = [];
             overflowCandidates = [];
             overflowSelected = new Set();

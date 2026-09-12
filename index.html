@@ -12,6 +12,7 @@
         h1 { text-align: center; font-size: 1.5rem; margin-bottom: 10px; color: #1a3e6e; }
         .status-bar { display: flex; flex-wrap: wrap; justify-content: space-between; background: #e9ecef; border-radius: 10px; padding: 10px; margin-bottom: 15px; font-weight: bold; }
         .status-item { flex: 1 1 45%; text-align: center; font-size: 0.9rem; }
+        .status-item.current-airport { flex: 1 1 100%; margin-top: 6px; padding-top: 6px; border-top: 1px solid #ced4da; }
         .btn { display: inline-block; padding: 12px 20px; margin: 5px; border: none; border-radius: 25px; background: #e0e0e0; color: #333; font-size: 1rem; cursor: pointer; width: auto; min-width: 120px; box-shadow: 0 2px 5px rgba(0,0,0,0.2); transition: background 0.2s; }
         .btn:active { background: #ccc; }
         .btn.secondary { background: #6c757d; color: white; }
@@ -60,18 +61,16 @@
             <div class="status-item">Punkte: <span id="pointsDisplay">0</span></div>
             <div class="status-item">Tank: <span id="tankDisplay">0 km</span></div>
             <div class="status-item">Bonuskarten: <span id="bonusCardsDisplay">0</span></div>
-            <div class="status-item">Aktueller Flughafen: <span id="currentAirportDisplay">–</span></div>
+            <div class="status-item current-airport">Aktueller Flughafen: <span id="currentAirportDisplay">–</span></div>
         </div>
 
         <div id="gameArea">
-            <!-- Startphase -->
             <div id="startSection" class="section">
                 <h2>Startflughafen scannen</h2>
                 <p>Bitte QR-Code des Startflughafens einscannen.</p>
                 <button class="btn" onclick="startScan('start')">QR scannen</button>
             </div>
 
-            <!-- Tankphase -->
             <div id="tankSection" class="section hidden">
                 <h2>Tanken oder Bonuskarte</h2>
                 <p>Tank: <strong id="tankBeforeRefuel">0 km</strong></p>
@@ -79,7 +78,7 @@
                     <button class="btn" id="btnTank" onclick="chooseTankAction('tank')">Tanken (+1000 km)</button>
                     <button class="btn" id="btnBonus" onclick="chooseTankAction('bonus')">Bonuskarte</button>
                 </div>
-                <p id="tankActionInfo" style="margin-top:5px; font-style:italic;">Bitte wählen.</p>
+                <p id="tankActionInfo" style="margin-top:5px; font-style:italic;">Tanken ist vorausgewählt.</p>
                 <hr style="margin:15px 0;">
                 <h3>Reserve ablegen (je +1000 km)</h3>
                 <div id="reserveDiscardList" class="reserve-controls"></div>
@@ -87,20 +86,19 @@
                 <button class="btn" id="btnContinue" onclick="finishTankPhase()">Weiter zur Auslage</button>
             </div>
 
-            <!-- Auslage scannen -->
             <div id="auslageSection" class="section hidden">
                 <h2>Auslage scannen (4 Karten)</h2>
-                <p>Scanne jetzt die 4 Flughafen-Karten der Auslage. Du kannst sie gleichzeitig vor die Kamera halten.</p>
+                <p>Halte die 4 Karten gleichzeitig vor die Kamera – sie werden alle auf einmal erkannt. Alternativ nacheinander scannen.</p>
                 <button class="btn" onclick="startScan('auslage')">QR-Scanner öffnen</button>
                 <div id="auslageList" class="available-list"></div>
-                <button class="btn success" onclick="finishAuslage()">Weiter zur Flugauswahl</button>
+                <button class="btn success" onclick="finishAuslage()">Mit dieser Auslage fortfahren</button>
             </div>
 
-            <!-- Flugauswahl -->
             <div id="flightSection" class="section hidden">
                 <h2>Flugroute wählen</h2>
                 <p>Tippe auf Flughäfen, um sie zur Route hinzuzufügen, oder scanne weitere Codes.</p>
                 <button class="btn" onclick="startScan('flight')">QR-Scanner öffnen</button>
+                <button class="btn secondary" onclick="backToAuslage()">Zurück zur Auslage</button>
                 <div style="margin-top:10px;">
                     <h4>Verfügbare Flughäfen</h4>
                     <div id="availableFlightsList"></div>
@@ -116,20 +114,17 @@
         <div id="logArea" class="hidden"></div>
     </div>
 
-    <!-- Scanner Overlay -->
     <div id="scannerOverlay">
         <video id="video" autoplay playsinline></video>
         <p id="scanHint">Richte die Kamera auf die QR-Codes.</p>
         <button class="btn danger" onclick="stopScan()">Scanner beenden</button>
     </div>
 
-    <!-- Animations Overlay -->
     <div id="animationOverlay">
         <div id="plane">🛫</div>
         <div class="overlay-text" id="animationText">Flug läuft...</div>
     </div>
 
-    <!-- Zusammenfassung -->
     <div id="summaryOverlay">
         <div class="summary-box">
             <h2>Rundenabschluss</h2>
@@ -145,7 +140,6 @@
         </div>
     </div>
 
-    <!-- Überlauf Auswahl -->
     <div id="overflowOverlay">
         <div class="summary-box">
             <h2>Reserve ist voll</h2>
@@ -163,12 +157,12 @@
         let bonusCards = 0;
         let tempBonusIncrease = 0;
         let currentAirport = null;
-        let currentTankAction = null;
-        let auslage = [];           // 4 gescannte Flughäfen zu Rundenbeginn
-        let reserve = [];           // bis zu 4 Flughäfen
-        let discardList = [];       // markierte Reservekarten zum Ablegen
-        let flightRoute = [];       // ausgewählte Flüge
-        let scanTarget = null;      // 'start', 'auslage', 'flight'
+        let currentTankAction = 'tank'; // Tanken ist Standard
+        let auslage = [];
+        let reserve = [];
+        let discardList = [];
+        let flightRoute = [];
+        let scanTarget = null;
         let historyStack = [];
         let logEntries = [];
         let overflowCandidates = [];
@@ -182,12 +176,8 @@
         function restoreUmlauts(str) {
             if (typeof str !== 'string') return str;
             return str
-                .replace(/Ae/g, 'Ä')
-                .replace(/Oe/g, 'Ö')
-                .replace(/Ue/g, 'Ü')
-                .replace(/ae/g, 'ä')
-                .replace(/oe/g, 'ö')
-                .replace(/ue/g, 'ü')
+                .replace(/Ae/g, 'Ä').replace(/Oe/g, 'Ö').replace(/Ue/g, 'Ü')
+                .replace(/ae/g, 'ä').replace(/oe/g, 'ö').replace(/ue/g, 'ü')
                 .replace(/ss/g, 'ß');
         }
 
@@ -196,7 +186,8 @@
             document.getElementById('pointsDisplay').textContent = totalPoints;
             document.getElementById('tankDisplay').textContent = `${Math.max(0, Math.round(tank))} km`;
             document.getElementById('bonusCardsDisplay').textContent = bonusCards;
-            document.getElementById('currentAirportDisplay').textContent = currentAirport ? currentAirport.name : '–';
+            document.getElementById('currentAirportDisplay').textContent =
+                currentAirport ? `${currentAirport.name} (${currentAirport.country})` : '–';
             if (!document.getElementById('tankSection').classList.contains('hidden')) {
                 document.getElementById('tankBeforeRefuel').textContent = `${Math.max(0, Math.round(tank))} km`;
             }
@@ -229,27 +220,6 @@
             if (historyStack.length > 20) historyStack.shift();
         }
 
-        function undo() {
-            if (historyStack.length <= 1) { alert('Kein früherer Zustand verfügbar.'); return; }
-            historyStack.pop();
-            const state = historyStack[historyStack.length - 1];
-            currentRound = state.currentRound;
-            tank = state.tank;
-            totalPoints = state.totalPoints;
-            bonusCards = state.bonusCards;
-            currentAirport = state.currentAirport;
-            auslage = [...state.auslage];
-            reserve = [...state.reserve];
-            discardList = [...state.discardList];
-            flightRoute = [...state.flightRoute];
-            logEntries = [...state.logEntries];
-            tempBonusIncrease = state.tempBonusIncrease;
-            updateStatus();
-            renderFlightRoute();
-            updateLogDisplay();
-            showTankPhase();
-        }
-
         function haversineDistance(coord1, coord2) {
             const R = 6371;
             const dLat = toRad(coord2.lat - coord1.lat);
@@ -270,13 +240,8 @@
 
         function updateContinueButton() {
             const btn = document.getElementById('btnContinue');
-            if (currentTankAction !== null) {
-                btn.style.background = '#dc3545';
-                btn.style.color = 'white';
-            } else {
-                btn.style.background = '#e0e0e0';
-                btn.style.color = '#333';
-            }
+            btn.style.background = '#dc3545';
+            btn.style.color = 'white';
         }
 
         // ==================== PHASEN ====================
@@ -292,9 +257,15 @@
             document.getElementById('tankSection').classList.remove('hidden');
             document.getElementById('auslageSection').classList.add('hidden');
             document.getElementById('flightSection').classList.add('hidden');
-            currentTankAction = null;
-            discardList = [];
+
+            // Tanken vorauswählen
+            currentTankAction = 'tank';
             tempBonusIncrease = 0;
+            discardList = [];
+            document.getElementById('btnTank').classList.add('selected-tank');
+            document.getElementById('btnBonus').classList.remove('selected-bonus');
+            document.getElementById('tankActionInfo').textContent = 'Gewählt: Tanken +1000 km';
+
             renderReserveDiscardList();
             updateStatus();
         }
@@ -316,6 +287,12 @@
             renderAvailableFlights();
             renderFlightRoute();
             updateStatus();
+        }
+
+        function backToAuslage() {
+            document.getElementById('flightSection').classList.add('hidden');
+            document.getElementById('auslageSection').classList.remove('hidden');
+            renderAuslageList();
         }
 
         function renderReserveDiscardList() {
@@ -355,7 +332,9 @@
             updateStatus();
             document.getElementById('btnTank').classList.toggle('selected-tank', action === 'tank');
             document.getElementById('btnBonus').classList.toggle('selected-bonus', action === 'bonus');
-            document.getElementById('tankActionInfo').textContent = action === 'tank' ? 'Gewählt: Tanken +1000 km' : 'Gewählt: Bonuskarte erhalten (+250 km Tanklimit)';
+            document.getElementById('tankActionInfo').textContent = action === 'tank'
+                ? 'Gewählt: Tanken +1000 km'
+                : 'Gewählt: Bonuskarte erhalten (+250 km Tanklimit)';
         }
 
         function finishTankPhase() {
@@ -372,7 +351,6 @@
                 tempBonusIncrease = 0;
                 addLog('Bonuskarte erhalten! Tanklimit dauerhaft um 250 km erhöht.');
             }
-            // Reserve ablegen
             discardList.sort((a,b) => b-a);
             for (const idx of discardList) {
                 const maxTank = 4000 + (bonusCards + tempBonusIncrease) * 250;
@@ -394,6 +372,7 @@
                 const info = document.createElement('span');
                 info.textContent = `${airport.name} (${airport.country})`;
                 const btn = document.createElement('button');
+                btn.className = 'remove';
                 btn.textContent = 'Entfernen';
                 btn.onclick = () => {
                     auslage.splice(index, 1);
@@ -410,7 +389,6 @@
                 alert('Bitte mindestens einen Flughafen scannen.');
                 return;
             }
-            // Prüfen, ob genau 4? Nicht zwingend, aber wir gehen davon aus.
             showFlightSelection();
         }
 
@@ -502,7 +480,6 @@
                     await video.play();
                 }
                 scannerActive = true;
-                // Prüfen, ob BarcodeDetector verfügbar ist (für Multiscan)
                 if ('BarcodeDetector' in window) {
                     usingBarcodeDetector = true;
                     requestAnimationFrame(scanLoopWithBarcodeDetector);
@@ -523,14 +500,12 @@
                 videoStream.getTracks().forEach(track => track.stop());
                 videoStream = null;
             }
-            // Nach dem Scannen ggf. Anzeigen aktualisieren
             if (scanTarget === 'auslage') {
                 renderAuslageList();
             } else if (scanTarget === 'flight') {
                 renderAvailableFlights();
                 renderFlightRoute();
             }
-            scanTarget = null;
         }
 
         async function scanLoopWithBarcodeDetector() {
@@ -540,15 +515,9 @@
                 try {
                     const detector = new BarcodeDetector({ formats: ['qr_code'] });
                     const codes = await detector.detect(video);
-                    if (codes.length > 0) {
-                        for (const code of codes) {
-                            handleQRCode(code.rawValue);
-                            // Bei 'start' sofort stoppen
-                            if (scanTarget === 'start') {
-                                stopScan();
-                                return;
-                            }
-                        }
+                    for (const code of codes) {
+                        if (!scannerActive) break;
+                        handleQRCode(code.rawValue);
                     }
                 } catch (e) {
                     console.warn('BarcodeDetector nicht nutzbar, fallback auf jsQR', e);
@@ -557,7 +526,7 @@
                     return;
                 }
             }
-            requestAnimationFrame(scanLoopWithBarcodeDetector);
+            if (scannerActive) requestAnimationFrame(scanLoopWithBarcodeDetector);
         }
 
         function scanLoopWithJsQR() {
@@ -573,13 +542,9 @@
                 const code = jsQR(imageData.data, imageData.width, imageData.height);
                 if (code && code.data) {
                     handleQRCode(code.data);
-                    if (scanTarget === 'start') {
-                        stopScan();
-                        return;
-                    }
                 }
             }
-            requestAnimationFrame(scanLoopWithJsQR);
+            if (scannerActive) requestAnimationFrame(scanLoopWithJsQR);
         }
 
         function handleQRCode(data) {
@@ -590,10 +555,9 @@
                     throw new Error('Ungültiger QR-Code');
                 }
             } catch (e) {
-                alert('QR-Code konnte nicht gelesen werden.');
+                // Ungültiger Code wird ignoriert, um Multiscan nicht zu unterbrechen
                 return;
             }
-            // Umlaute wiederherstellen
             airport.name = restoreUmlauts(airport.name);
             airport.country = restoreUmlauts(airport.country);
             airport.cluster = restoreUmlauts(airport.cluster || '');
@@ -614,40 +578,45 @@
                 logEntries = [];
                 addLog(`Spiel gestartet mit Startflughafen ${airport.name}.`);
                 pushHistory();
-                showTankPhase();
                 stopScan();
-            } else if (scanTarget === 'auslage') {
-                // Prüfen, ob schon vorhanden
+                showTankPhase();
+                return;
+            }
+
+            if (scanTarget === 'auslage') {
                 const exists = auslage.some(a => a.name === airport.name && a.lat === airport.lat && a.lon === airport.lon);
                 if (!exists && auslage.length < 4) {
                     auslage.push(airport);
                     renderAuslageList();
                     addLog(`Auslage-Karte hinzugefügt: ${airport.name}.`);
-                } else if (auslage.length >= 4) {
-                    // Optional: Wenn 4 erreicht, Scanner automatisch stoppen
-                    alert('Bereits 4 Karten in der Auslage.');
-                    stopScan();
+                    if (auslage.length === 4) {
+                        addLog('Alle 4 Auslage-Karten gescannt.');
+                        stopScan();
+                        showFlightSelection();
+                        return;
+                    }
                 }
-            } else if (scanTarget === 'flight') {
-                // Wenn der gescannte Flughafen bereits in Auslage/Reserve ist, zur Route hinzufügen, sonst als neue Karte in Auslage?
+                return;
+            }
+
+            if (scanTarget === 'flight') {
                 const available = getAvailableFlights();
                 const found = available.find(a => a.name === airport.name && a.lat === airport.lat && a.lon === airport.lon);
                 if (found) {
                     addToRoute(found);
                 } else {
-                    // Unbekannte Karte: der Auslage hinzufügen, damit sie verfügbar wird
                     if (auslage.length < 4) {
                         auslage.push(airport);
                         renderAuslageList();
                     } else if (reserve.length < 4) {
                         reserve.push(airport);
                     } else {
-                        alert('Keine freie Kapazität in Auslage oder Reserve.');
                         return;
                     }
                     addToRoute(airport);
                     renderAvailableFlights();
                 }
+                return;
             }
         }
 
@@ -717,16 +686,15 @@
             totalPoints += totalRoundPoints;
             currentAirport = currentAirportCopy;
 
-            // Geflogene Flughäfen aus Auslage und Reserve entfernen
             const flownNames = flightRoute.map(f => f.name);
             auslage = auslage.filter(a => !flownNames.includes(a.name));
             reserve = reserve.filter(a => !flownNames.includes(a.name));
 
-            // Nicht geflogene Auslage-Karten in Reserve verschieben
             const restAuslage = [...auslage];
             if (reserve.length + restAuslage.length <= 4) {
                 reserve.push(...restAuslage);
                 auslage = [];
+                pushHistory();
                 finishRound();
             } else {
                 overflowCandidates = [...reserve, ...restAuslage];
@@ -737,20 +705,16 @@
 
         function skipFlight() {
             addLog(`Runde ${currentRound}: Kein Flug durchgeführt.`);
-            currentRound++;
-            if (currentRound > 12) {
-                endGame();
+            // Auslage komplett in Reserve verschieben
+            reserve = [...reserve, ...auslage];
+            auslage = [];
+            if (reserve.length > 4) {
+                overflowCandidates = [...reserve];
+                overflowSelected = new Set();
+                showOverflowSelection();
             } else {
                 pushHistory();
-                auslage = [];
-                reserve = [...reserve, ...auslage];
-                if (reserve.length > 4) {
-                    overflowCandidates = [...reserve];
-                    overflowSelected = new Set();
-                    showOverflowSelection();
-                } else {
-                    finishRound();
-                }
+                finishRound();
             }
         }
 
@@ -792,6 +756,7 @@
             overflowCandidates = [];
             overflowSelected = new Set();
             document.getElementById('overflowOverlay').classList.remove('active');
+            pushHistory();
             finishRound();
         }
 
@@ -801,7 +766,6 @@
             if (currentRound > 12) {
                 endGame();
             } else {
-                pushHistory();
                 showTankPhase();
             }
         }
